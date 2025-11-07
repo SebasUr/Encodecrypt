@@ -78,6 +78,14 @@ void plaintext_to_state(const uint8_t *plaintext, state_t *state) {
     }
 }
 
+void state_to_ciphertext(const state_t *state, uint8_t *ciphertext) {
+    for (uint8_t i = 0; i < 4; ++i) {
+        for (uint8_t j = 0; j < 4; ++j) {
+            ciphertext[i + 4 * j] = (*state)[i][j];
+        }
+    }
+}
+
 void sub_bytes(state_t *state) {
     for (uint8_t i = 0; i < 4; ++i) {
         for (uint8_t j = 0; j < 4; ++j) {
@@ -118,21 +126,11 @@ void add_round_key(state_t *state, const word* words, const int round) {
     }
 }
 
-aes_code_t encrypt(const uint8_t *plaintext, const uint8_t *key) {
+aes_code_t encrypt(const uint8_t *plaintext, const uint8_t *key, uint8_t *ciphertext) {
     state_t state;
     word expanded_key[44];
     plaintext_to_state(plaintext, &state);
     key_expansion(key, expanded_key);
-    
-    // Initial State
-    printf("Initial state:\n");
-    for (uint8_t i = 0; i < 4; ++i) {
-        for (uint8_t j = 0; j < 4; ++j) {
-            printf("%02x ", state[i][j]);
-        }
-        printf("\n");
-    }
-    printf("\n");
     
     // Start of AES rounds
     add_round_key(&state, expanded_key, 0);
@@ -147,21 +145,6 @@ aes_code_t encrypt(const uint8_t *plaintext, const uint8_t *key) {
     shift_rows(&state);
     add_round_key(&state, expanded_key, 40);
     
-    // Output of ciphertext
-    printf("Ciphertext:\n");
-    for (uint8_t i = 0; i < 4; ++i) {
-        for (uint8_t j = 0; j < 4; ++j) {
-            printf("%02x ", state[i][j]);
-        }
-        printf("\n");
-    }
-    printf("\n");
-
-    // printf("Expanded key:\n");
-    // for (int i = 0; i < 44; i++) {
-    //     printf("%2d: %02x %02x %02x %02x\n", i, expanded_key[i][0], expanded_key[i][1], expanded_key[i][2], expanded_key[i][3]);
-    // }
-    // printf("\n");
-
+    state_to_ciphertext(&state, ciphertext);
     return AES_SUCCESS;
 }

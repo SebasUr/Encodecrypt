@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -Iinclude
-SRCS = main.c src/key.c src/aes.c 
+SRCS = main.c src/key.c src/aes.c src/file_ops.c
 OBJS = $(SRCS:%.c=build/%.o)
 TARGET = aes128
 

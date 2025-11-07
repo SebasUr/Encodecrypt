@@ -9,6 +9,7 @@
 
 typedef uint8_t word[4];
 
+extern const uint8_t sbox[256];
 void key_expansion(const uint8_t *key, word* words);
 
 #endif

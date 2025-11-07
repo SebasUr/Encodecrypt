@@ -2,19 +2,49 @@
     Implementation of the AES-128 cipher algorithm
     By: Sebastián Andrés Uribe Ruiz & Daniel Santana Meza
 */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <getopt.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include "include/aes.h"
+#include "include/file_ops.h"
 
-int main() {
-    uint8_t plaintext[16] = {
-        0x32, 0x43, 0xf6, 0xa8, 0x88, 0x5a, 0x30, 0x8d, 0x31, 0x31, 0x98, 0xa2, 0xe0, 0x37, 0x07, 0x34
-    };
+#define MAX_PASSWORD_LEN 128
 
-    uint8_t key[16] = {
-        0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88 ,0x09, 0xcf, 0x4f, 0x3c
-    };
+int main(int argc, char *argv[]) {
+    char *input_path = NULL;
+    char *password = NULL;
+    int opt;
 
+    while ((opt = getopt(argc, argv, "e:p:")) != -1) {
+        switch (opt) {
+            case 'e':
+                input_path = optarg;
+                break;
+            case 'p':
+                password = optarg;
+                break;
+            default:
+                print_usage(argv[0]);
+                return 1;
+        }
+    }
 
-    encrypt(plaintext, key);
+    if (!input_path || !password) {
+        printf("Error: Both path and password are required\n");
+        print_usage(argv[0]);
+        return 1;
+    }
 
-    return 0;
+    if (is_directory(input_path)) {
+        return encrypt_directory(input_path, password);
+    } else {
+        uint8_t key[16];
+        derive_key_from_password(password, key);
+        return encrypt_file(input_path, key);
+    }
 }
