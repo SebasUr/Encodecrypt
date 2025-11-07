@@ -18,6 +18,11 @@ void shift_rows(state_t *state);
 void mix_columns(state_t *state);
 void add_round_key(state_t *state, const word* words, const int round);
 
+void inv_sub_bytes(state_t *state);
+void inv_shift_rows(state_t *state);
+void inv_mix_columns(state_t *state);
+
 aes_code_t encrypt(const uint8_t *plaintext, const uint8_t *key, uint8_t *ciphertext);
+aes_code_t decrypt(const uint8_t *ciphertext, const uint8_t *key, uint8_t *plaintext);
 
 #endif

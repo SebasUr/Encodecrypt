@@ -12,10 +12,12 @@
 #define BUFFER_SIZE 4096
 
 void print_usage(const char *program_name) {
-    printf("Usage: %s -e <file|directory> -p <password>\n", program_name);
+    printf("Usage: %s -e <file|directory> -p <password>  (for encryption)\n", program_name);
+    printf("       %s -d <file|directory> -p <password>  (for decryption)\n", program_name);
     printf("Options:\n");
-    printf("  -e <path>      File or directory to encrypt\n");
-    printf("  -p <password>  Password for encryption\n");
+    printf("  -e <path>      Encrypt file or directory\n");
+    printf("  -d <path>      Decrypt file or directory\n");
+    printf("  -p <password>  Password for encryption/decryption\n");
 }
 
 void derive_key_from_password(const char *password, uint8_t *key) {
@@ -27,7 +29,7 @@ void derive_key_from_password(const char *password, uint8_t *key) {
     }
 }
 
-int encrypt_file(const char *filename, const uint8_t *key) {
+int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_mode) {
     int fd_in, fd_out;
     struct stat st;
     uint8_t *file_content;
@@ -55,7 +57,7 @@ int encrypt_file(const char *filename, const uint8_t *key) {
         return -1;
     }
 
-    // Read file content
+    // Read file content using read() syscall
     while ((bytes_read = read(fd_in, file_content + total_bytes, BUFFER_SIZE)) > 0) {
         total_bytes += bytes_read;
     }
@@ -72,22 +74,38 @@ int encrypt_file(const char *filename, const uint8_t *key) {
     // Calculate number of blocks
     int num_blocks = (int)((total_bytes + 15) / 16);
 
-    // Encrypt each block
+    // Process each block
     for (int i = 0; i < num_blocks; i++) {
         uint8_t block[16] = {0};
-        uint8_t encrypted_block[16] = {0};
+        uint8_t processed_block[16] = {0};
         int block_size = (i == num_blocks - 1 && total_bytes % 16 != 0) ? (int)(total_bytes % 16) : 16;
 
         memcpy(block, file_content + i * 16, (size_t)block_size);
-        encrypt(block, key, encrypted_block);
-        memcpy(file_content + i * 16, encrypted_block, 16);
+
+        if (encrypt_mode) {
+            encrypt(block, key, processed_block);
+        } else {
+            decrypt(block, key, processed_block);
+        }
+
+        memcpy(file_content + i * 16, processed_block, 16);
     }
 
     // Create output filename
     char output_filename[256];
-    snprintf(output_filename, sizeof(output_filename), "%s.enc", filename);
+    if (encrypt_mode) {
+        snprintf(output_filename, sizeof(output_filename), "%s.enc", filename);
+    } else {
+        // Remove .enc extension if present
+        size_t len = strlen(filename);
+        if (len > 4 && strcmp(filename + len - 4, ".enc") == 0) {
+            snprintf(output_filename, sizeof(output_filename), "%.*s", (int)(len - 4), filename);
+        } else {
+            snprintf(output_filename, sizeof(output_filename), "%s.dec", filename);
+        }
+    }
 
-    // Write encrypted file
+    // Write processed file using write() syscall
     fd_out = open(output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out == -1) {
         perror("Error creating output file");
@@ -106,11 +124,11 @@ int encrypt_file(const char *filename, const uint8_t *key) {
     close(fd_out);
     free(file_content);
 
-    printf("File encrypted successfully: %s\n", output_filename);
+    printf("File %s successfully: %s\n", encrypt_mode ? "encrypted" : "decrypted", output_filename);
     return 0;
 }
 
-int encrypt_directory(const char *dirpath, const char *password) {
+int process_directory(const char *dirpath, const char *password, int encrypt_mode) {
     DIR *dir;
     struct dirent *entry;
     struct stat st;
@@ -125,7 +143,7 @@ int encrypt_directory(const char *dirpath, const char *password) {
         return -1;
     }
 
-    printf("Encrypting files in directory: %s\n", dirpath);
+    printf("%s files in directory: %s\n", encrypt_mode ? "Encrypting" : "Decrypting", dirpath);
 
     while ((entry = readdir(dir)) != NULL) {
         // Skip . and .. entries
@@ -138,8 +156,8 @@ int encrypt_directory(const char *dirpath, const char *password) {
 
         // Check if it's a regular file
         if (stat(fullpath, &st) == 0 && S_ISREG(st.st_mode)) {
-            printf("Encrypting: %s\n", entry->d_name);
-            encrypt_file(fullpath, key);
+            printf("%s: %s\n", encrypt_mode ? "Encrypting" : "Decrypting", entry->d_name);
+            process_file_syscalls(fullpath, key, encrypt_mode);
         }
     }
 
