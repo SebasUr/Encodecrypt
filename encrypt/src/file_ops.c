@@ -111,17 +111,26 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
     }
 
     size_t file_size = (size_t)st.st_size;
-    size_t padded_size = (file_size > 0)
-        ? ((file_size + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE
-        : AES_BLOCK_SIZE;
+    size_t padded_size = 0; // will be set for encryption; for decryption equals file_size
+    if (encrypt_mode) {
+        // PKCS#7 padding length
+        size_t pad_len = AES_BLOCK_SIZE - (file_size % AES_BLOCK_SIZE);
+        if (pad_len == 0) pad_len = AES_BLOCK_SIZE; // full block of padding when already aligned
+        padded_size = file_size + pad_len;
+    } else {
+        padded_size = file_size; // encrypted file should already be multiple of AES_BLOCK_SIZE
+        if (padded_size % AES_BLOCK_SIZE != 0) {
+            fprintf(stderr, "Warning: Encrypted file size (%zu) not multiple of block size. Decryption may fail.\n", padded_size);
+        }
+    }
 
-    // Allocate memory for file content (zero-padded to block size)
-    file_content = (uint8_t*)calloc(padded_size, sizeof(uint8_t));
+    file_content = (uint8_t*)malloc(padded_size);
     if (!file_content) {
-        printf("Error: Memory allocation failed\n");
+        fprintf(stderr, "Error: Memory allocation failed\n");
         close(fd_in);
         return -1;
     }
+    memset(file_content, 0, padded_size); // ensure clean buffer
 
     // Read file content using read() syscall
     while ((bytes_read = read(fd_in, file_content + total_bytes, BUFFER_SIZE)) > 0) {
@@ -137,7 +146,23 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
 
     close(fd_in);
 
-    // Calculate number of blocks
+    // If encrypting, append PKCS#7 padding now
+    if (encrypt_mode) {
+        size_t pad_len = padded_size - total_bytes; // remaining bytes in last block
+        if (pad_len == 0 || pad_len > AES_BLOCK_SIZE) {
+            fprintf(stderr, "Internal padding calculation error.\n");
+            free(file_content);
+            return -1;
+        }
+        for (size_t i = 0; i < pad_len; i++) {
+            file_content[total_bytes + i] = (uint8_t)pad_len;
+        }
+        total_bytes = padded_size; // now includes padding
+    } else {
+        // For decrypt mode total_bytes == encrypted file size
+    }
+
+    // Number of 16-byte blocks (after padding for encryption, original for decryption)
     int num_blocks = (int)((total_bytes + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE);
     int block_threads = recommended_thread_count();
     bool parallel_blocks = (num_blocks >= MIN_BLOCKS_FOR_PARALLEL) && (block_threads > 1);
@@ -152,9 +177,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
 
     for (int i = 0; i < num_blocks; i++) {
         uint8_t *current_block = file_content + i * AES_BLOCK_SIZE;
-        size_t block_size = (i == num_blocks - 1 && total_bytes % AES_BLOCK_SIZE != 0)
-            ? (size_t)(total_bytes % AES_BLOCK_SIZE)
-            : AES_BLOCK_SIZE;
+        size_t block_size = AES_BLOCK_SIZE; // always full block now (padding ensures this for encryption)
 
         if (!parallel_blocks) {
             process_block_immediate(current_block, block_size, key, encrypt_mode);
@@ -197,7 +220,30 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
         }
     }
 
-    // Write processed file using write() syscall
+    // If decrypting, remove PKCS#7 padding before writing
+    size_t write_bytes = (size_t)num_blocks * AES_BLOCK_SIZE; // default
+    if (!encrypt_mode) {
+        if (write_bytes > 0) {
+            uint8_t pad_len = file_content[write_bytes - 1];
+            bool valid_padding = (pad_len >= 1 && pad_len <= AES_BLOCK_SIZE && pad_len <= write_bytes);
+            if (valid_padding) {
+                // verify all padding bytes
+                for (size_t i = 0; i < pad_len; i++) {
+                    if (file_content[write_bytes - 1 - i] != pad_len) {
+                        valid_padding = false;
+                        break;
+                    }
+                }
+            }
+            if (valid_padding) {
+                write_bytes -= pad_len;
+            } else {
+                fprintf(stderr, "Warning: Invalid padding detected. Output will include all bytes.\n");
+            }
+        }
+    }
+
+    // Write processed file using write() syscall (strip padding for decrypt case)
     fd_out = open(output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out == -1) {
         perror("Error creating output file");
@@ -205,7 +251,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
         return -1;
     }
 
-    ssize_t bytes_written = write(fd_out, file_content, (size_t)num_blocks * AES_BLOCK_SIZE);
+    ssize_t bytes_written = write(fd_out, file_content, write_bytes);
     if (bytes_written == -1) {
         perror("Error writing file");
         free(file_content);
@@ -216,7 +262,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
     close(fd_out);
     free(file_content);
 
-    printf("File %s successfully: %s\n", encrypt_mode ? "encrypted" : "decrypted", output_filename);
+    printf("File %s successfully: %s (size: %zu bytes)\n", encrypt_mode ? "encrypted" : "decrypted", output_filename, write_bytes);
     return 0;
 }
 
