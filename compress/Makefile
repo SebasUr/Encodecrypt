@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -std=c11 -Wall -Wextra -pedantic -O2 -I. -Isrc -Iutils
-LDFLAGS =
+LDFLAGS = -lpthread
 BUILDDIR = build
 BINDIR = bin
 TARGET = $(BINDIR)/huffman
@@ -14,7 +14,8 @@ SOURCES = main.c \
           utils/bitreader.c \
           utils/bitwriter.c \
           utils/decompress_utils.c \
-          utils/file_utils.c
+          utils/file_utils.c \
+          utils/threadpool.c
 
 # Generar nombres de objetos en build/
 OBJECTS = $(patsubst %.c,$(BUILDDIR)/%.o,$(notdir $(SOURCES)))
@@ -56,6 +57,9 @@ $(BUILDDIR)/decompress_utils.o: utils/decompress_utils.c | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/file_utils.o: utils/file_utils.c | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/threadpool.o: utils/threadpool.c | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Crear directorios si no existen

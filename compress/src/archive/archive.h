@@ -4,15 +4,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Magic number para identificar archivos .huf
+// magic num
 #define ARCHIVE_MAGIC "HUFF"
 #define ARCHIVE_VERSION 0x01
 #define MAX_PATH_LENGTH 4096
 
-/**
- * Estructura que representa una entrada de archivo en el archive
- * Contiene metadata de cada archivo comprimido dentro del .huf
- */
+// Representación del archivo
 typedef struct {
     char path[MAX_PATH_LENGTH];     // Ruta relativa del archivo
     uint64_t original_size;         // Tamaño del archivo sin comprimir
@@ -20,10 +17,7 @@ typedef struct {
     uint64_t data_offset;           // Posición en el archivo donde empiezan los datos
 } FileEntry;
 
-/**
- * Header del archivo .huf
- * Estructura al inicio del archivo que describe su contenido
- */
+// Descripciónd el contenido
 typedef struct {
     char magic[4];                  // "HUFF"
     uint8_t version;                // Versión del formato (0x01)

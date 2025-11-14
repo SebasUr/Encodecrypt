@@ -35,4 +35,37 @@ unsigned char* readEntireFile(const char *path, size_t *out_size);
  */
 int ensureDirectoryExists(const char *path);
 
+/**
+ * Verifica si una ruta es un directorio
+ * 
+ * @param path Ruta a verificar
+ * @return 1 si es directorio, 0 si es archivo u otro tipo, -1 si error
+ */
+int isDirectory(const char *path);
+
+/**
+ * Expande una lista de paths (archivos y/o carpetas) a solo archivos
+ * Si un path es carpeta, recolecta recursivamente todos los archivos dentro
+ * Si un path es archivo, lo mantiene tal cual
+ * 
+ * MEMORIA: El caller debe liberar:
+ *  1. Cada string del array retornado con free()
+ *  2. El array mismo con free()
+ * 
+ * @param input_paths Array de paths (pueden ser archivos o carpetas)
+ * @param num_inputs Cantidad de paths en input_paths
+ * @param out_count Puntero donde se guardará la cantidad total de archivos
+ * @return Array de strings con paths de archivos únicamente, o NULL si error
+ * 
+ * Ejemplo:
+ *   const char *inputs[] = {"file.txt", "mi_carpeta/", "otro.txt"};
+ *   int total;
+ *   char **files = expandPaths(inputs, 3, &total);
+ *   // files contendrá: ["file.txt", "mi_carpeta/a.txt", "mi_carpeta/b.txt", "otro.txt"]
+ *   // Liberar después:
+ *   for (int i = 0; i < total; i++) free(files[i]);
+ *   free(files);
+ */
+char** expandPaths(const char **input_paths, int num_inputs, int *out_count);
+
 #endif // FILE_UTILS_H

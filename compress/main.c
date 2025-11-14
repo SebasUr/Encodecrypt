@@ -4,6 +4,7 @@
 #include <getopt.h>
 
 #include "src/archive/archive.h"
+#include "utils/file_utils.h"
 
 void print_usage(const char *prog_name) {
     printf("Huffman Compression Tool\n\n");
@@ -111,11 +112,37 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         
-        // Crear array de punteros a los nombres de archivos
-        const char **input_files = (const char **)&argv[optind + 1];
+        // Crear array de punteros a los nombres de archivos/carpetas
+        const char **input_paths = (const char **)&argv[optind + 1];
         
-        // Llamar a la función de archive que maneja todo
-        if (createArchive(archive_path, input_files, num_files) != 0) {
+        // Expandir carpetas a archivos individuales
+        // Si son archivos, se mantienen igual. Si son carpetas, se exploran recursivamente
+        int total_files = 0;
+        char **expanded_files = expandPaths(input_paths, num_files, &total_files);
+        
+        if (!expanded_files || total_files == 0) {
+            fprintf(stderr, "Error: No files to compress after expansion\n");
+            if (expanded_files) {
+                for (int i = 0; i < total_files; i++) {
+                    free(expanded_files[i]);
+                }
+                free(expanded_files);
+            }
+            return 1;
+        }
+        
+        printf("\nTotal files to compress: %d\n\n", total_files);
+        
+        // Llamar a la función de archive con los archivos expandidos
+        int result = createArchive(archive_path, (const char **)expanded_files, total_files);
+        
+        // Liberar memoria de los paths expandidos
+        for (int i = 0; i < total_files; i++) {
+            free(expanded_files[i]);
+        }
+        free(expanded_files);
+        
+        if (result != 0) {
             fprintf(stderr, "Error creating archive\n");
             return 1;
         }

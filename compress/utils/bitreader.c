@@ -43,14 +43,13 @@ int bitReaderReadBit(BitReader *br) {
             ssize_t n = read(br->fd, &br->buffer, 1);
             if (n <= 0) {
                 br->eof = 1;
-                return -1;  // EOF o error
+                return -1; 
             }
         }
         br->bits_available = 8;
         br->pos = 0;
     }
 
-    // Leer bit más significativo disponible
     int bit = (br->buffer >> (7 - br->pos)) & 1;
     br->pos++;
     br->bits_available--;

@@ -3,11 +3,13 @@
 #include "../core/decompress.h"
 #include "../huffman/huffman.h"
 #include "../../utils/file_utils.h"
+#include "../../utils/threadpool.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <libgen.h> 
 
@@ -72,6 +74,66 @@ static int compressToFile(const unsigned char *data, size_t size,
 }
 
 /**
+ * Estructura para un job de compresión en el thread pool
+ * Contiene toda la información necesaria para comprimir un archivo
+ */
+typedef struct {
+    int index;                      // Índice del archivo en el array
+    const char *input_path;         // Path del archivo a comprimir
+    char temp_path[256];            // Path del archivo temporal de salida
+    FileEntry entry;                // Entrada en la tabla (NO puntero, copia local)
+    int status;                     // 0 = éxito, -1 = error
+    pthread_mutex_t *print_mutex;   // Mutex para printf thread-safe
+} CompressionJob;
+
+/**
+ * Función que ejecutará cada worker thread del pool
+ * Esta es la función que se pasa a threadPoolAddJob()
+ */
+static void compressFileWorker(void *arg) {
+    CompressionJob *job = (CompressionJob*)arg;
+    
+    // Leer archivo completo en memoria
+    size_t original_size;
+    unsigned char *data = readEntireFile(job->input_path, &original_size);
+    if (!data) {
+        pthread_mutex_lock(job->print_mutex);
+        fprintf(stderr, "  Error reading: %s (skipping)\n", job->input_path);
+        pthread_mutex_unlock(job->print_mutex);
+        job->status = -1;
+        return;
+    }
+    
+    // Comprimir a archivo temporal
+    size_t compressed_size;
+    if (compressToFile(data, original_size, job->temp_path, &compressed_size) != 0) {
+        pthread_mutex_lock(job->print_mutex);
+        fprintf(stderr, "  Error compressing: %s (skipping)\n", job->input_path);
+        pthread_mutex_unlock(job->print_mutex);
+        free(data);
+        job->status = -1;
+        return;
+    }
+    
+    // Calcular ratio y mostrar progreso (protegido por mutex)
+    double ratio = 100.0 * compressed_size / original_size;
+    pthread_mutex_lock(job->print_mutex);
+    printf("  [%d] %s: %lu bytes -> %lu bytes (%.2f%%)\n", 
+            job->index + 1, job->input_path, original_size, compressed_size, ratio);
+    pthread_mutex_unlock(job->print_mutex);
+    
+    // Guardar metadata en la entrada LOCAL (cada job tiene su propia copia)
+    strncpy(job->entry.path, job->input_path, MAX_PATH_LENGTH - 1);
+    job->entry.path[MAX_PATH_LENGTH - 1] = '\0';
+    job->entry.original_size = original_size;
+    job->entry.compressed_size = compressed_size;
+    // data_offset se llenará en la fase de merge
+    
+    free(data);
+    job->status = 0;
+}
+
+/**
  * esta función crea un archive huf para uno o varios.
  * el formato del archivo es:
  * 
@@ -132,65 +194,135 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         free(entries); close(archive_fd); return -1;
     }
     
-    // procesar cada archivo de entrada
+    // Compresión paralela con threadpool
+    
+    long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);  // Obtener # de CPUs
+    if (num_cpus < 1) num_cpus = 4;  // Fallback si falla sysconf
+    
+    int num_threads = (num_inputs < num_cpus) ? num_inputs : num_cpus;
+    
+    printf("Using %d worker threads for compression\n\n", num_threads);
+    
+    // Crear thread pool
+    ThreadPool *pool = threadPoolCreate(num_threads);
+    if (!pool) {
+        fprintf(stderr, "Error creating thread pool\n");
+        free(entries);
+        close(archive_fd);
+        return -1;
+    }
+    
+    // Mutex para printf thread-safe 
+    pthread_mutex_t print_mutex;
+    pthread_mutex_init(&print_mutex, NULL);
+    
+    // C** HEAP ALLOCATION porque sino da segfault con archivos grandes
+    CompressionJob **jobs = malloc(sizeof(CompressionJob*) * num_inputs);
+    if (!jobs) {
+        perror("malloc jobs array");
+        threadPoolDestroy(pool);
+        pthread_mutex_destroy(&print_mutex);
+        free(entries);
+        close(archive_fd);
+        return -1;
+    }
+    
+    // Preparar y encolar todos los jobs
+    // IMPORTANTE: Cada job se aloca individualmente en el heap porque el worker
+    // puede ejecutarse después de que el loop continúe
     for (int i = 0; i < num_inputs; i++) {
-        printf("Compressing [%d/%d]: %s\n", i + 1, num_inputs, input_paths[i]);
+        CompressionJob *job = malloc(sizeof(CompressionJob));
+        if (!job) {
+            perror("malloc job");
+            // Limpiar jobs creados hasta ahora
+            for (int j = 0; j < i; j++) {
+                free(jobs[j]);
+            }
+            free(jobs);
+            threadPoolDestroy(pool);
+            pthread_mutex_destroy(&print_mutex);
+            free(entries);
+            close(archive_fd);
+            return -1;
+        }
         
-        // Leer archivo completo en memoria
-        size_t original_size;
-        unsigned char *data = readEntireFile(input_paths[i], &original_size);
-        if (!data) {
-            fprintf(stderr, "  Error reading: %s (skipping)\n", input_paths[i]);
+        jobs[i] = job;
+        job->index = i;
+        job->input_path = input_paths[i];
+        // Usar índice + timestamp ppara evitar colisiones
+        snprintf(job->temp_path, sizeof(job->temp_path), "/tmp/huf_%ld_%d.tmp", 
+                 (long)getpid(), i);
+        // Inicializar entry local (cada job tiene su copia)
+        memset(&job->entry, 0, sizeof(FileEntry));
+        job->status = -1;  // Inicializar como error
+        job->print_mutex = &print_mutex;
+        
+        // Añadir job al pool (se ejecutará cuando un worker esté disponible)
+        if (threadPoolAddJob(pool, compressFileWorker, job) != 0) {
+            fprintf(stderr, "Error adding job to pool\n");
+        }
+    }
+    
+    // Esperar a que TODOS los jobs terminen
+    threadPoolWait(pool);
+    
+    printf("\nCompression phase completed. Merging files...\n\n");
+    
+    // Destruir thread pool (ya no se necesita)
+    threadPoolDestroy(pool);
+    pthread_mutex_destroy(&print_mutex);
+    
+    // Merge secuencia, ir copiando todo al archive
+    int successful_files = 0;
+    
+    for (int i = 0; i < num_inputs; i++) {
+        CompressionJob *job = jobs[i];
+        
+        // Saltar archivos que fallaron en la compresión
+        if (job->status != 0) {
+            free(job);  // Liberar el job aunque haya fallado
             continue;
         }
         
-        // Comprimir a archivo temporal, usa /tmp porque es rápido y se limpia automáticamente
-        char temp_path[256];
-        snprintf(temp_path, sizeof(temp_path), "/tmp/huf_temp_%d.huf", i);
+        // Copiar metadata del job local al array entries
+        entries[i] = job->entry;
         
-        size_t compressed_size;
-        if (compressToFile(data, original_size, temp_path, &compressed_size) != 0) {
-            fprintf(stderr, "  Error compressing: %s (skipping)\n", input_paths[i]);
-            free(data); continue;
-        }
+        // Guardar el offset donde comenzarán los datos de este archivo
+        entries[i].data_offset = (uint64_t)lseek(archive_fd, 0, SEEK_CUR);
         
-        // calculo de ratio de compresión / pal usuario
-        double ratio = 100.0 * compressed_size / original_size;
-        printf("  %lu bytes -> %lu bytes (%.2f%%)\n", original_size, compressed_size, ratio);
-        
-        // guardar metadata en la tabla
-        strncpy(entries[i].path, input_paths[i], MAX_PATH_LENGTH - 1);
-        entries[i].path[MAX_PATH_LENGTH - 1] = '\0';  // Asegurar null terminator
-        entries[i].original_size = original_size;
-        entries[i].compressed_size = compressed_size;
-        entries[i].data_offset = (uint64_t)lseek(archive_fd, 0, SEEK_CUR);  // Guardar posición actual
-        
-        // copiar archivos de temp al file
-        int temp_fd = open(temp_path, O_RDONLY);
+        // Abrir archivo temporal
+        int temp_fd = open(job->temp_path, O_RDONLY);
         if (temp_fd < 0) {
             perror("open temp file");
-            free(data); continue;
+            free(job);
+            continue;
         }
         
+        // Copiar contenido del temp al archive
         unsigned char buffer[8192];
         ssize_t n;
-
-        // Copiar de a chunks de 8kb
         while ((n = read(temp_fd, buffer, sizeof(buffer))) > 0) {
             if (write(archive_fd, buffer, n) != n) {
                 perror("write compressed data");
                 close(temp_fd);
-                free(data);
-                continue;
+                free(job);
+                break;
             }
         }
-
+        
         close(temp_fd);
-        unlink(temp_path);
-        free(data); 
+        unlink(job->temp_path);  // Eliminar archivo temporal
+        successful_files++;
+        
+        free(job);  // Liberar memoria del job
     }
     
-    // se vuelve al inciio para actualizar la tabla.
+    free(jobs);  // Liberar array de punteros
+    
+    printf("Successfully compressed %d/%d files\n\n", successful_files, num_inputs);
+    
+    // Actualizar tablas y offsets 
+    // se vuelve al inicio para actualizar la tabla.
     off_t end_pos = lseek(archive_fd, 0, SEEK_CUR);  // Guardar posición actual
     lseek(archive_fd, table_pos, SEEK_SET);           // Volver a la tabla
     

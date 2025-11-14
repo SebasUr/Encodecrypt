@@ -4,7 +4,9 @@
 
 #include "huffman.h"
 
-static Code *g_codes_for_sort = NULL;
+// THREAD-LOCAL: Cada thread tiene su propia copia
+// Esto previene race conditions cuando múltiples threads ejecutan huffmanAlgorithm
+static _Thread_local Code *g_codes_for_sort = NULL;
 huffmanNode* createNode(int symbol, uint64_t weight, unsigned long order) {
     huffmanNode* NewNode = malloc(sizeof *NewNode);
     if (NewNode == NULL) { return NULL; }
