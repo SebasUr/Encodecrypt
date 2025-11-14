@@ -1,0 +1,64 @@
+┌─────────────────────────────────────────────┐
+│                ARCHIVE .HUF                 │
+├─────────────────────────────────────────────┤
+│  [HEADER DEL ARCHIVE]                       │
+│    - Magic: "HUFF" (4 bytes)                │
+│    - Version: 0x01 (1 byte)                 │
+│    - Num archivos: N (4 bytes)              │
+├─────────────────────────────────────────────┤
+│  [TABLA DE CONTENIDOS]                      │
+│    FileEntry #1:                            │
+│      - path[4096]                           │
+│      - original_size      (8 bytes)         │
+│      - compressed_size    (8 bytes)         │
+│      - data_offset        (8 bytes)         │
+│    FileEntry #2:                            │
+│      - path[4096]                           │
+│      - original_size                        │
+│      - compressed_size                      │
+│      - data_offset                          │
+│    ... N entradas                           │
+├─────────────────────────────────────────────┤
+│  [DATOS COMPRIMIDOS]                        │
+│    Archivo #1 comprimido:                   │
+│      [HUF1]                                 │
+│      - Magic: "HUF1"                        │
+│      - Original size                        │
+│      - Code lengths[256]                    │
+│      - Trailing bits                        │
+│      - Datos comprimidos                    │
+│                                             │
+│    Archivo #2 comprimido:                   │
+│      [HUF1] [Formato de compressFile]       │
+│      ...                                    │
+│                                             │
+│    Archivo #N comprimido:                   │
+│      [HUF1] [Formato de compressFile]       │
+│      ...                                    │
+└─────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+┌──────────────────────────┐
+│ Header (9 bytes)         │
+│ Tabla vacía (N × 4120)   │ -
+│ ┌──────────────────────┐ │
+│ │ Archivo 1 (HUF1)     │ │ - data_offset[0]
+│ │ - Magic: HUF1        │ │
+│ │ - Size: 1000         │ │
+│ │ - Codes[256]         │ │
+│ │ - Datos comprimidos  │ │
+│ └──────────────────────┘ │
+│ ┌──────────────────────┐ │
+│ │ Archivo 2 (HUF1)     │ │ - data_offset[1]
+│ │ ...                  │ │
+│ └──────────────────────┘ │
+└──────────────────────────┘
