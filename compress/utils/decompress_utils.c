@@ -3,7 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 
-// Función auxiliar para comparar entradas canónicas
 static int compareEntries(const void *a, const void *b) {
     const CanonicalEntry *ea = (const CanonicalEntry *)a;
     const CanonicalEntry *eb = (const CanonicalEntry *)b;
@@ -14,9 +13,7 @@ static int compareEntries(const void *a, const void *b) {
     return ea->symbol - eb->symbol;
 }
 
-// Reconstruir códigos canónicos desde las longitudes
 void reconstructCanonicalCodes(const unsigned char lens[256], Code codes[256]) {
-    // Crear lista de símbolos con longitud > 0
     CanonicalEntry entries[256];
     int count = 0;
     
@@ -30,10 +27,8 @@ void reconstructCanonicalCodes(const unsigned char lens[256], Code codes[256]) {
     
     if (count == 0) return;
     
-    // Ordenar por longitud, luego por símbolo
     qsort(entries, count, sizeof(CanonicalEntry), compareEntries);
     
-    // Generar códigos canónicos
     uint64_t code = 0;
     size_t prev_len = entries[0].length;
     
@@ -50,7 +45,6 @@ void reconstructCanonicalCodes(const unsigned char lens[256], Code codes[256]) {
     }
 }
 
-// Preparar filas canónicas 
 int prepareCanonicalRows(const Code codes[256], CanonicalEntry entries[256], CanonicalRow rows[257], size_t *out_max_len) {
     int count = 0;
     size_t max_len = 0;
@@ -98,7 +92,6 @@ int prepareCanonicalRows(const Code codes[256], CanonicalEntry entries[256], Can
     return count;
 }
 
-// Funciones del ByteWriter
 void byteWriterInit(ByteWriter *bw, int fd) {
     bw->fd = fd;
     bw->pos = 0;

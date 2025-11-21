@@ -13,31 +13,18 @@
 #include <unistd.h>
 #include <libgen.h> 
 
-/**
- * Función auxiliar para comprimir datos a un archivo temporal
- * 
- * @param data Buffer con datos a comprimir
- * @param size Tamaño del buffer
- * @param temp_path Ruta del archivo temporal donde guardar resultado
- * @param compressed_size Puntero donde guardar el tamaño comprimido
- * @return 0 si éxito, -1 si error
- */
-static int compressToFile(const unsigned char *data, size_t size, 
-                         const char *temp_path, size_t *compressed_size) {
-    // Calcular frecuencias
+static int compressToFile(const unsigned char *data, size_t size, const char *temp_path, size_t *compressed_size) {
     int f_s[256] = {0};
     for (size_t i = 0; i < size; i++) {
         f_s[data[i]]++;
     }
     
-    // Construir el árbol de Huffman
     huffmanNode **activeNodes = malloc(256 * sizeof(huffmanNode *));
     if (!activeNodes) {
         perror("malloc activeNodes");
         return -1;
     }
     
-    // Ejecutar el algoritmo de Huffman para generar el árbol y los códigos
     Code codes[256];
     huffmanNode *root = huffmanAlgorithm(f_s, activeNodes, codes);
     
@@ -46,12 +33,6 @@ static int compressToFile(const unsigned char *data, size_t size,
         free(activeNodes); return -1;
     }
     
-    // comprimir
-    // d! función escribe:
-    // - Header mágico "HUF1"
-    // - Tamaño original
-    // - Tabla de longitudes de códigos
-    // - Datos comprimidos
     int result = compressFile(data, size, temp_path, codes);
     
     freeHuffmanTree(root);
@@ -62,7 +43,6 @@ static int compressToFile(const unsigned char *data, size_t size,
         return -1;
     }
     
-    // obtener tamaño del archivo comprimido
     struct stat st;
     if (stat(temp_path, &st) != 0) {
         perror("stat");
@@ -73,27 +53,19 @@ static int compressToFile(const unsigned char *data, size_t size,
     return 0;
 }
 
-/**
- * Estructura para un job de compresión en el thread pool
- * Contiene toda la información necesaria para comprimir un archivo
- */
 typedef struct {
-    int index;                      // Índice del archivo en el array
-    const char *input_path;         // Path del archivo a comprimir
-    char temp_path[256];            // Path del archivo temporal de salida
-    FileEntry entry;                // Entrada en la tabla (NO puntero, copia local)
-    int status;                     // 0 = éxito, -1 = error
-    pthread_mutex_t *print_mutex;   // Mutex para printf thread-safe
+    int index;
+    const char *input_path;
+    char temp_path[256];
+    FileEntry entry;
+    int status;
+    pthread_mutex_t *print_mutex;
 } CompressionJob;
 
-/**
- * Función que ejecutará cada worker thread del pool
- * Esta es la función que se pasa a threadPoolAddJob()
- */
+
 static void compressFileWorker(void *arg) {
     CompressionJob *job = (CompressionJob*)arg;
     
-    // Leer archivo completo en memoria
     size_t original_size;
     unsigned char *data = readEntireFile(job->input_path, &original_size);
     if (!data) {
@@ -104,7 +76,6 @@ static void compressFileWorker(void *arg) {
         return;
     }
     
-    // Comprimir a archivo temporal
     size_t compressed_size;
     if (compressToFile(data, original_size, job->temp_path, &compressed_size) != 0) {
         pthread_mutex_lock(job->print_mutex);
@@ -115,43 +86,22 @@ static void compressFileWorker(void *arg) {
         return;
     }
     
-    // Calcular ratio y mostrar progreso (protegido por mutex)
     double ratio = 100.0 * compressed_size / original_size;
     pthread_mutex_lock(job->print_mutex);
     printf("  [%d] %s: %lu bytes -> %lu bytes (%.2f%%)\n", 
             job->index + 1, job->input_path, original_size, compressed_size, ratio);
     pthread_mutex_unlock(job->print_mutex);
     
-    // Guardar metadata en la entrada LOCAL (cada job tiene su propia copia)
     strncpy(job->entry.path, job->input_path, MAX_PATH_LENGTH - 1);
     job->entry.path[MAX_PATH_LENGTH - 1] = '\0';
     job->entry.original_size = original_size;
     job->entry.compressed_size = compressed_size;
-    // data_offset se llenará en la fase de merge
     
     free(data);
     job->status = 0;
 }
 
-/**
- * esta función crea un archive huf para uno o varios.
- * el formato del archivo es:
- * 
- * HEADER
-*  - Magic: "HUFF" (4 bytes)
-*  - Version: 0x01 (1 byte)
-*  - Número de archivos: N (4 bytes)
- * 
- * TABLA DE LOS ARCHIVOS (FileEntry*N)
- *   porcada archivo:
- *  - Path (4096 bytes)
- *  - Tamaño original (8 bytes)
- *  - Tamaño comprimido (8 bytes)
- *  - Offset de datos (8 bytes)
- * 
- * Datos
- *   Cada archivo comprimido en formato HUF1 (de compress.c)
- */
+
 int createArchive(const char *archive_path, const char **input_paths, int num_inputs) {
     printf("Creating archive: %s\n", archive_path);
     printf("Files to compress: %d\n\n", num_inputs);
@@ -159,14 +109,11 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
     int archive_fd = open(archive_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (archive_fd < 0) { perror("open archive"); return -1;}
     
-
-    // escribir header
     ArchiveHeader header;
     memcpy(header.magic, ARCHIVE_MAGIC, 4);
     header.version = ARCHIVE_VERSION;
     header.num_files = (uint32_t)num_inputs;
     
-    // Escribir header usando write() de POSIX
     if (write(archive_fd, header.magic, 4) != 4) {
         perror("write magic");
         close(archive_fd); return -1; }
@@ -177,8 +124,6 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         perror("write num_files");
         close(archive_fd); return -1; }
     
-    // reserva de espacio para la tabla de archivos
-    // se escribe al final después de saber los offset
     off_t table_pos = lseek(archive_fd, 0, SEEK_CUR);
     FileEntry *entries = calloc(num_inputs, sizeof(FileEntry));
     if (!entries) {
@@ -187,23 +132,19 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         return -1;
     }
     
-    // Escribir tabla vacía
     size_t table_size = sizeof(FileEntry) * num_inputs;
     if (write(archive_fd, entries, table_size) != (ssize_t)table_size) {
         perror("write table placeholder");
         free(entries); close(archive_fd); return -1;
     }
     
-    // Compresión paralela con threadpool
-    
-    long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);  // Obtener # de CPUs
-    if (num_cpus < 1) num_cpus = 4;  // Fallback si falla sysconf
+    long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (num_cpus < 1) num_cpus = 4;
     
     int num_threads = (num_inputs < num_cpus) ? num_inputs : num_cpus;
     
     printf("Using %d worker threads for compression\n\n", num_threads);
     
-    // Crear thread pool
     ThreadPool *pool = threadPoolCreate(num_threads);
     if (!pool) {
         fprintf(stderr, "Error creating thread pool\n");
@@ -212,11 +153,9 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         return -1;
     }
     
-    // Mutex para printf thread-safe 
     pthread_mutex_t print_mutex;
     pthread_mutex_init(&print_mutex, NULL);
     
-    // C** HEAP ALLOCATION porque sino da segfault con archivos grandes
     CompressionJob **jobs = malloc(sizeof(CompressionJob*) * num_inputs);
     if (!jobs) {
         perror("malloc jobs array");
@@ -227,14 +166,10 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         return -1;
     }
     
-    // Preparar y encolar todos los jobs
-    // IMPORTANTE: Cada job se aloca individualmente en el heap porque el worker
-    // puede ejecutarse después de que el loop continúe
     for (int i = 0; i < num_inputs; i++) {
         CompressionJob *job = malloc(sizeof(CompressionJob));
         if (!job) {
             perror("malloc job");
-            // Limpiar jobs creados hasta ahora
             for (int j = 0; j < i; j++) {
                 free(jobs[j]);
             }
@@ -249,48 +184,37 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         jobs[i] = job;
         job->index = i;
         job->input_path = input_paths[i];
-        // Usar índice + timestamp ppara evitar colisiones
         snprintf(job->temp_path, sizeof(job->temp_path), "/tmp/huf_%ld_%d.tmp", 
                  (long)getpid(), i);
-        // Inicializar entry local (cada job tiene su copia)
         memset(&job->entry, 0, sizeof(FileEntry));
-        job->status = -1;  // Inicializar como error
+        job->status = -1;
         job->print_mutex = &print_mutex;
         
-        // Añadir job al pool (se ejecutará cuando un worker esté disponible)
         if (threadPoolAddJob(pool, compressFileWorker, job) != 0) {
             fprintf(stderr, "Error adding job to pool\n");
         }
     }
     
-    // Esperar a que TODOS los jobs terminen
     threadPoolWait(pool);
     
     printf("\nCompression phase completed. Merging files...\n\n");
     
-    // Destruir thread pool (ya no se necesita)
     threadPoolDestroy(pool);
     pthread_mutex_destroy(&print_mutex);
     
-    // Merge secuencia, ir copiando todo al archive
     int successful_files = 0;
     
     for (int i = 0; i < num_inputs; i++) {
         CompressionJob *job = jobs[i];
         
-        // Saltar archivos que fallaron en la compresión
         if (job->status != 0) {
-            free(job);  // Liberar el job aunque haya fallado
+            free(job);
             continue;
         }
         
-        // Copiar metadata del job local al array entries
         entries[i] = job->entry;
-        
-        // Guardar el offset donde comenzarán los datos de este archivo
         entries[i].data_offset = (uint64_t)lseek(archive_fd, 0, SEEK_CUR);
         
-        // Abrir archivo temporal
         int temp_fd = open(job->temp_path, O_RDONLY);
         if (temp_fd < 0) {
             perror("open temp file");
@@ -298,7 +222,6 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
             continue;
         }
         
-        // Copiar contenido del temp al archive
         unsigned char buffer[8192];
         ssize_t n;
         while ((n = read(temp_fd, buffer, sizeof(buffer))) > 0) {
@@ -311,20 +234,18 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         }
         
         close(temp_fd);
-        unlink(job->temp_path);  // Eliminar archivo temporal
+        unlink(job->temp_path);
         successful_files++;
         
-        free(job);  // Liberar memoria del job
+        free(job);
     }
     
-    free(jobs);  // Liberar array de punteros
+    free(jobs);
     
     printf("Successfully compressed %d/%d files\n\n", successful_files, num_inputs);
     
-    // Actualizar tablas y offsets 
-    // se vuelve al inicio para actualizar la tabla.
-    off_t end_pos = lseek(archive_fd, 0, SEEK_CUR);  // Guardar posición actual
-    lseek(archive_fd, table_pos, SEEK_SET);           // Volver a la tabla
+    off_t end_pos = lseek(archive_fd, 0, SEEK_CUR);
+    lseek(archive_fd, table_pos, SEEK_SET);
     
     if (write(archive_fd, entries, table_size) != (ssize_t)table_size) {
         perror("write final table");
@@ -333,7 +254,7 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
         return -1;
     }
     
-    lseek(archive_fd, end_pos, SEEK_SET);  // Volver al final
+    lseek(archive_fd, end_pos, SEEK_SET);
     
     free(entries);
     close(archive_fd);
@@ -342,9 +263,6 @@ int createArchive(const char *archive_path, const char **input_paths, int num_in
     return 0;
 }
 
-/**
- * Muestra el contenido de un archive .huf de forma legible
- */
 int listArchive(const char *archive_path) {
     int archive_fd = open(archive_path, O_RDONLY);
     if (archive_fd < 0) {
@@ -360,7 +278,7 @@ int listArchive(const char *archive_path) {
     }
     
     if (memcmp(header.magic, ARCHIVE_MAGIC, 4) != 0) {
-        fprintf(stderr, "Error: No es un archivo .huf válido\n");
+        fprintf(stderr, "Error: Invalid .huf file\n");
         close(archive_fd);
         return -1;
     }
@@ -418,9 +336,6 @@ int listArchive(const char *archive_path) {
     return 0;
 }
 
-/**
- * Extrae todos los archivos de un archive .huf
- */
 int extractArchive(const char *archive_path, const char *output_dir) {
     int archive_fd = open(archive_path, O_RDONLY);
     if (archive_fd < 0) {
@@ -428,7 +343,6 @@ int extractArchive(const char *archive_path, const char *output_dir) {
         return -1;
     }
     
-    // Leer header
     ArchiveHeader header;
     if (read(archive_fd, header.magic, 4) != 4) {
         perror("read magic");
@@ -436,7 +350,7 @@ int extractArchive(const char *archive_path, const char *output_dir) {
     }
     
     if (memcmp(header.magic, ARCHIVE_MAGIC, 4) != 0) {
-        fprintf(stderr, "Error: No es un archivo .huf válido\n");
+        fprintf(stderr, "Error: Invalid .huf file\n");
         close(archive_fd); return -1;
     }
     
@@ -472,17 +386,14 @@ int extractArchive(const char *archive_path, const char *output_dir) {
     for (uint32_t i = 0; i < header.num_files; i++) {
         printf("Extracting [%u/%u]: %s\n", i + 1, header.num_files, entries[i].path);
         
-        // crea archivo temporal con datos comprimidos
         char temp_compressed[256];
         snprintf(temp_compressed, sizeof(temp_compressed), "/tmp/huf_extract_%u.huf", i);
         
-        // Vamos ala posición de los datos
         if (lseek(archive_fd, entries[i].data_offset, SEEK_SET) < 0) {
             perror("lseek");
             continue;
         }
         
-        // Copiar datos comprimidos a archivo temporal.
         int temp_fd = open(temp_compressed, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (temp_fd < 0) {
             perror("open temp");
@@ -506,21 +417,18 @@ int extractArchive(const char *archive_path, const char *output_dir) {
         }
         close(temp_fd);
         
-        // Construir ruta de salida
         char output_path[MAX_PATH_LENGTH];
         snprintf(output_path, sizeof(output_path), "%s/%s", output_dir, entries[i].path);
         
-        // Crear directorios si es necesario
         ensureDirectoryExists(output_path);
         
-        // Descomprimir usando la función existente decompressFile()
         if (decompressFile(temp_compressed, output_path) != 0) {
             fprintf(stderr, "  Error decompressing: %s\n", entries[i].path);
         } else {
             printf("  Extracted: %s (%lu bytes)\n", output_path, entries[i].original_size);
         }
         
-        unlink(temp_compressed);  // Eliminar temporal
+        unlink(temp_compressed);
     }
     
     free(entries);
@@ -530,18 +438,13 @@ int extractArchive(const char *archive_path, const char *output_dir) {
     return 0;
 }
 
-/**
- * Extrae un solo archivo específico de un archive .huf
- */
 int extractFile(const char *archive_path, const char *file_to_extract, const char *output_dir) {
-    // Abrir archivo usando POSIX
     int archive_fd = open(archive_path, O_RDONLY);
     if (archive_fd < 0) {
         perror("open");
         return -1;
     }
     
-    // Leer header
     ArchiveHeader header;
     if (read(archive_fd, header.magic, 4) != 4) {
         perror("read magic");
@@ -550,7 +453,7 @@ int extractFile(const char *archive_path, const char *file_to_extract, const cha
     }
     
     if (memcmp(header.magic, ARCHIVE_MAGIC, 4) != 0) {
-        fprintf(stderr, "Error: No es un archivo .huf válido\n");
+        fprintf(stderr, "Error: Invalid .huf file\n");
         close(archive_fd);
         return -1;
     }
@@ -567,7 +470,6 @@ int extractFile(const char *archive_path, const char *file_to_extract, const cha
         return -1;
     }
     
-    // Buscar archivo en la tabla usando POSIX
     FileEntry entry;
     int found = 0;
     
@@ -590,20 +492,16 @@ int extractFile(const char *archive_path, const char *file_to_extract, const cha
         return -1;
     }
     
-    // Extraer el archivo
     printf("Extracting: %s\n", entry.path);
     
-    // Crear archivo temporal con datos comprimidos
     char temp_compressed[] = "/tmp/huf_extract_single.huf";
     
-    // Ir a la posición de los datos comprimidos usando lseek
     if (lseek(archive_fd, entry.data_offset, SEEK_SET) < 0) {
         perror("lseek");
         close(archive_fd);
         return -1;
     }
     
-    // Copiar datos comprimidos a archivo temporal usando POSIX
     int temp_fd = open(temp_compressed, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (temp_fd < 0) {
         perror("open temp");
@@ -633,7 +531,6 @@ int extractFile(const char *archive_path, const char *file_to_extract, const cha
     close(temp_fd);
     close(archive_fd);
     
-    // Descomprimir temporal -> archivo final
     char output_path[4096];
     if (output_dir) {
         snprintf(output_path, sizeof(output_path), "%s/%s", output_dir, basename((char*)entry.path));
@@ -648,7 +545,7 @@ int extractFile(const char *archive_path, const char *file_to_extract, const cha
         return -1;
     }
     
-    unlink(temp_compressed);  // Eliminar temporal
+    unlink(temp_compressed);
     
     printf("Extraction complete\n");
     return 0;

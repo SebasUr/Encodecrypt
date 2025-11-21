@@ -31,7 +31,6 @@ void bitReaderInit(BitReader *br, int fd) {
 }
 
 int bitReaderReadBit(BitReader *br) {
-    // Si no hay bits disponibles, leer siguiente byte
     if (br->bits_available == 0) {
         if (br->use_mmap) {
             if (br->mapped_pos >= br->mapped_size) {

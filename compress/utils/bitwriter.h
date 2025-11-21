@@ -5,11 +5,11 @@
 #include <stddef.h>
 
 typedef struct BitWriter {
-    int fd;                  // descriptor
+    int fd;
     unsigned char buffer;
-    int bits_in_buffer;      // numero actual de bits en el buffer (0-7)
-    unsigned char chunk[4096]; // Bloque para escrituras agrupadas
-    size_t chunk_pos;        // Posición actual en el bloque
+    int bits_in_buffer;
+    unsigned char chunk[4096];
+    size_t chunk_pos;
 } BitWriter;
 
 void bitWriterInit(BitWriter *bw, int fd);

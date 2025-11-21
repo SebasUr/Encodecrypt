@@ -132,7 +132,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
     }
     memset(file_content, 0, padded_size); // ensure clean buffer
 
-    // Read file content using read() syscall
+    // Read file content
     while ((bytes_read = read(fd_in, file_content + total_bytes, BUFFER_SIZE)) > 0) {
         total_bytes += bytes_read;
     }
@@ -157,7 +157,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
         for (size_t i = 0; i < pad_len; i++) {
             file_content[total_bytes + i] = (uint8_t)pad_len;
         }
-        total_bytes = padded_size; // now includes padding
+        total_bytes = padded_size;
     } else {
         // For decrypt mode total_bytes == encrypted file size
     }
@@ -177,7 +177,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
 
     for (int i = 0; i < num_blocks; i++) {
         uint8_t *current_block = file_content + i * AES_BLOCK_SIZE;
-        size_t block_size = AES_BLOCK_SIZE; // always full block now (padding ensures this for encryption)
+        size_t block_size = AES_BLOCK_SIZE;
 
         if (!parallel_blocks) {
             process_block_immediate(current_block, block_size, key, encrypt_mode);
@@ -221,7 +221,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
     }
 
     // If decrypting, remove PKCS#7 padding before writing
-    size_t write_bytes = (size_t)num_blocks * AES_BLOCK_SIZE; // default
+    size_t write_bytes = (size_t)num_blocks * AES_BLOCK_SIZE;
     if (!encrypt_mode) {
         if (write_bytes > 0) {
             uint8_t pad_len = file_content[write_bytes - 1];
@@ -243,7 +243,7 @@ int process_file_syscalls(const char *filename, const uint8_t *key, int encrypt_
         }
     }
 
-    // Write processed file using write() syscall (strip padding for decrypt case)
+    // Write processed file
     fd_out = open(output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out == -1) {
         perror("Error creating output file");

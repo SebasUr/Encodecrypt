@@ -7,42 +7,36 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Función principal de descompresión
 int decompressFile(const char *input_path, const char *output_path) {
     int fd_in = open(input_path, O_RDONLY);
     if (fd_in < 0) {
         return -1;
     }
     
-    // Leer y verificar encabezado mágico
     char magic[4];
     if (read(fd_in, magic, 4) != 4 || memcmp(magic, "HUF1", 4) != 0) {
         close(fd_in);
         return -1;
     }
     
-    // Leer tamaño original
     uint64_t original_size;
     if (read(fd_in, &original_size, sizeof(uint64_t)) != sizeof(uint64_t)) {
         close(fd_in);
         return -1;
     }
     
-    // Leer longitudes de códigos
     unsigned char lens[256];
     if (read(fd_in, lens, 256) != 256) {
         close(fd_in);
         return -1;
     }
     
-    // Leer trailing_bits
     unsigned char trailing_bits;
     if (read(fd_in, &trailing_bits, 1) != 1) {
         close(fd_in);
         return -1;
     }
     
-    // Reconstruir códigos canónicos
     Code codes[256];
     memset(codes, 0, sizeof(codes));
     reconstructCanonicalCodes(lens, codes);
@@ -55,14 +49,12 @@ int decompressFile(const char *input_path, const char *output_path) {
         return -1;
     }
     
-    // Abrir archivo de salida
     int fd_out = open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0) {
         close(fd_in);
         return -1;
     }
     
-    // Inicializar BitReader
     BitReader br;
     bitReaderInit(&br, fd_in);
 
@@ -71,7 +63,6 @@ int decompressFile(const char *input_path, const char *output_path) {
     ByteWriter out;
     byteWriterInit(&out, fd_out);
 
-    // Decodificar datos
     uint64_t bytes_written = 0;
     uint64_t current_code = 0;
     int current_length = 0;
@@ -83,7 +74,6 @@ int decompressFile(const char *input_path, const char *output_path) {
             break;
         }
         
-        // Construir código bit a bit
         current_code = (current_code << 1) | bit;
         current_length++;
         
